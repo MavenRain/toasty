@@ -1,4 +1,4 @@
-use toasty_core::{schema::db::TableId, stmt, stmt::ExprContext};
+use toasty_core::{schema::db::TableId, stmt, stmt::ExprContext, stmt::ValueSet};
 
 use crate::engine::simplify;
 
@@ -15,6 +15,11 @@ impl Exec<'_> {
     ///
     /// For any other form (including a single equality), simplifies and returns
     /// it as a single-element vec (or empty if unsatisfiable).
+    ///
+    /// Duplicate values in the input list collapse to a single predicate, since
+    /// each predicate is dispatched as an independent kv-driver call and dups
+    /// would yield duplicate result rows (breaking the unique-key invariant of
+    /// downstream `HashIndex` lookups in nested-merge).
     ///
     /// Each returned predicate has been simplified and is guaranteed
     /// satisfiable.
@@ -48,9 +53,11 @@ impl Exec<'_> {
             unreachable!()
         };
 
+        let mut seen = ValueSet::with_capacity(items.len());
         items
             .into_iter()
             .filter(|item| !item.is_null())
+            .filter(|item| seen.insert(item.clone()))
             .filter_map(|item| {
                 let mut pred = *map.map.clone();
                 // Unpack Record fields so arg(i) binds to field i.
@@ -75,9 +82,11 @@ impl Exec<'_> {
             unreachable!()
         };
 
+        let mut seen = ValueSet::with_capacity(values.len());
         values
             .into_iter()
             .filter(|v| !v.is_null())
+            .filter(|v| seen.insert(v.clone()))
             .filter_map(|v| {
                 let mut pred = stmt::Expr::binary_op(expr.clone(), stmt::BinaryOp::Eq, v);
                 simplify::simplify_expr(cx, &mut pred);
